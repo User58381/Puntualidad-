@@ -285,7 +285,10 @@ h1{font-size:1.6rem}
   <div class="workspace">
     <section class="surface" id="registerView" aria-label="Buscar y registrar retardo">
       <div class="surface-heading">
-        <div><h2>¿Quién llegó tarde?</h2><p>Busca su nombre y marca la palomita.</p></div>
+        <div>
+          <h2>¿Quién llegó tarde?</h2>
+          <p>Toca la palomita para marcar; tócala otra vez para quitar el retardo.</p>
+        </div>
         <span class="roster-count" id="rosterCount">345 alumnos</span>
       </div>
 
@@ -331,6 +334,7 @@ h1{font-size:1.6rem}
         <div><h2>Reportes de puntualidad</h2><p>Nombres, cantidades y horas por grado y grupo.</p></div>
         <span class="pdf-tag">PDF</span>
       </div>
+
       <div class="report-controls">
         <fieldset>
           <legend>Periodo del reporte</legend>
@@ -365,6 +369,7 @@ h1{font-size:1.6rem}
 
         <button class="button primary download-pdf" id="downloadPdf" type="button">Descargar PDF</button>
       </div>
+
       <div id="reportPreview" class="report-preview"></div>
     </section>
 
@@ -411,7 +416,7 @@ h1{font-size:1.6rem}
       <div class="local-list-heading">
         <div>
           <h3>Agregados en este celular</h3>
-          <p class="subtle">También aparecen en los reportes cuando les marcas un retardo.</p>
+          <p class="subtle">Toca la palomita para marcar o quitar el retardo de hoy. También aparecen en los reportes.</p>
         </div>
         <button class="button secondary" type="button" id="localStudentsPdf">PDF de esta lista</button>
       </div>
@@ -436,12 +441,14 @@ h1{font-size:1.6rem}
       <div class="summary-heading"><h2>Hoy, por grado</h2><span class="mini-label">12 grupos</span></div>
       <div id="gradeSummary" class="grade-summary"></div>
       <p class="summary-note">Cada palomita cuenta como un retardo.</p>
+
       <div class="local-note">
         <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
           <rect x="6" y="2" width="12" height="20" rx="2"></rect><path d="M10 18h4"></path>
         </svg>
         <div><strong>Guardado en este dispositivo</strong><p id="saveStatus">Preparando los datos…</p></div>
       </div>
+
       <button type="button" class="button secondary backup-side" id="quickBackup">Exportar respaldo</button>
     </aside>
   </div>
@@ -1088,10 +1095,8 @@ h1{font-size:1.6rem}
       request.onupgradeneeded = () => {
         const db = request.result;
         db.createObjectStore('students', {keyPath: 'id'});
-
         const store = db.createObjectStore('records', {keyPath: 'id'});
         store.createIndex('date', 'date', {unique: false});
-
         db.createObjectStore('meta', {keyPath: 'key'});
       };
 
@@ -1216,7 +1221,6 @@ h1{font-size:1.6rem}
 
   function selectView(view) {
     if (!['register', 'today', 'reports', 'students'].includes(view)) return;
-
     state.view = view;
 
     for (const name of ['register', 'today', 'reports', 'students']) {
@@ -1234,6 +1238,7 @@ h1{font-size:1.6rem}
 
   function filteredStudents(query = $('search').value, group = state.group) {
     const tokens = norm(query).split(' ').filter(Boolean);
+
     return state.roster.filter(s =>
       (group === 'all' || groupKey(s) === group) &&
       tokens.every(q => norm(s.name).includes(q))
@@ -1312,8 +1317,8 @@ h1{font-size:1.6rem}
           </div>
           <button type="button" data-mark="${s.id}"
             class="mark-button${r ? ' is-marked' : ''}${pending ? ' pending' : ''}"
-            ${r || pending ? 'disabled' : ''}
-            aria-label="${esc((r ? 'Retardo ya registrado: ' : 'Registrar retardo de ') + titleName(s.name) + ', ' + groupLabel(groupKey(s)))}"
+            ${pending ? 'disabled' : ''}
+            aria-label="${esc((r ? 'Quitar retardo de ' : 'Registrar retardo de ') + titleName(s.name) + ', ' + groupLabel(groupKey(s)))}"
             aria-pressed="${Boolean(r)}">
             <span aria-hidden="true">✓</span>
           </button>
@@ -1446,9 +1451,9 @@ h1{font-size:1.6rem}
                 </div>
                 <button type="button" data-mark="${s.id}"
                   class="mark-button${r ? ' is-marked' : ''}${pending ? ' pending' : ''}"
-                  ${r || pending ? 'disabled' : ''}
+                  ${pending ? 'disabled' : ''}
                   aria-pressed="${Boolean(r)}"
-                  aria-label="${esc((r ? 'Retardo ya registrado: ' : 'Registrar retardo de ') + titleName(s.name) + ', ' + groupLabel(g.key))}">
+                  aria-label="${esc((r ? 'Quitar retardo de ' : 'Registrar retardo de ') + titleName(s.name) + ', ' + groupLabel(g.key))}">
                   <span aria-hidden="true">✓</span>
                 </button>
               </div>`;
@@ -1685,6 +1690,60 @@ h1{font-size:1.6rem}
     }
   }
 
+  async function toggleLate(studentId) {
+    if (!state.ready) throw new Error('Los datos todavía no están listos.');
+
+    const student = state.roster.find(s => s.id === studentId);
+    if (!student) throw new Error('El alumno no existe en la lista.');
+    if (state.pending.has(studentId)) return {status: 'pending'};
+
+    const record = createLateRecord(student);
+
+    state.pending.add(studentId);
+    renderStudents();
+    renderLocalStudents();
+
+    try {
+      const result = await transaction(['records'], 'readwrite', (tx, done) => {
+        const store = tx.objectStore('records');
+        const request = store.get(record.id);
+
+        request.onsuccess = () => {
+          if (request.result) {
+            store.delete(record.id);
+            done({status: 'removed', record: request.result});
+          } else {
+            store.add(record);
+            done({status: 'saved', record});
+          }
+        };
+      });
+
+      await reload();
+      notifyChange();
+
+      if (result.status === 'saved') {
+        toast(
+          `${titleName(student.name)} · ${groupLabel(groupKey(student))} · ${timeLabel(record.time)}`,
+          () => removeLate(record.id, false)
+        );
+      } else {
+        toast(`${titleName(student.name)} · Retardo de hoy quitado.`);
+      }
+
+      return {
+        status: result.status,
+        studentId,
+        date: result.record.date,
+        time: result.record.time
+      };
+    } finally {
+      state.pending.delete(studentId);
+      renderStudents();
+      renderLocalStudents();
+    }
+  }
+
   async function removeLate(id, confirmation = true) {
     const record = state.records.find(r => r.id === id);
     if (!record) return;
@@ -1745,6 +1804,7 @@ h1{font-size:1.6rem}
 
   function reportStats(selection) {
     const records = selectRecords(selection);
+
     return {
       records,
       total: records.length,
@@ -1754,6 +1814,7 @@ h1{font-size:1.6rem}
 
   function groupStats(records, key) {
     const r = records.filter(x => groupKey(x) === key);
+
     return {
       total: r.length,
       unique: new Set(r.map(x => x.studentId)).size
@@ -1987,6 +2048,7 @@ h1{font-size:1.6rem}
       this.pages.forEach((commands, i) => {
         const pageId = objects.length;
         const contentId = pageId + 1;
+
         kids.push(`${pageId} 0 R`);
 
         objects.push(
@@ -2058,6 +2120,7 @@ h1{font-size:1.6rem}
     pdf.y += 29;
 
     pdf.heading('Resumen por grupo');
+
     pdf.columns(
       ['Grado / grupo', 'Alumnos', 'Registros de retardo'],
       [49, 255, 402]
@@ -2068,6 +2131,7 @@ h1{font-size:1.6rem}
 
     groups.forEach(g => {
       const s = groupStats(stats.records, g.key);
+
       pdf.row(
         [groupLabel(g.key), String(s.unique), String(s.total)],
         [49, 255, 402],
@@ -2098,7 +2162,12 @@ h1{font-size:1.6rem}
 
     if (!stats.total) {
       pdf.ensure(35);
-      pdf.text('No hay retardos registrados en este periodo.', 40, pdf.y, 11, true);
+
+      pdf.text(
+        'No hay retardos registrados en este periodo.',
+        40, pdf.y, 11, true
+      );
+
       return pdf.finish();
     }
 
@@ -2108,6 +2177,7 @@ h1{font-size:1.6rem}
       const dayRecords = stats.records.filter(r => r.date === date);
 
       pdf.ensure(80);
+
       pdf.heading(
         dateLabel(date),
         `${dayRecords.length} ${dayRecords.length === 1 ? 'alumno' : 'alumnos'}`
@@ -2121,6 +2191,7 @@ h1{font-size:1.6rem}
         if (!rows.length) return;
 
         pdf.ensure(90);
+
         pdf.text(
           `${groupLabel(g.key)} · ${rows.length} ${rows.length === 1 ? 'alumno' : 'alumnos'}`,
           40, pdf.y, 11, true
@@ -2129,6 +2200,7 @@ h1{font-size:1.6rem}
         pdf.y += 23;
         pdf.tableTitle = `${dateLabel(date, false)} · ${groupLabel(g.key)}`;
         pdf.tableHeaders = ['N.º', 'Nombre del alumno', 'Hora de registro'];
+
         pdf.columns(pdf.tableHeaders, [49, 80, 448]);
 
         rows.forEach((r, i) => {
@@ -2238,6 +2310,7 @@ h1{font-size:1.6rem}
         'Todavía no se han agregado alumnos en este dispositivo.',
         40, pdf.y, 10
       );
+
       return pdf.finish();
     }
 
@@ -2363,9 +2436,11 @@ h1{font-size:1.6rem}
 
     if (!supported) {
       await exportBackup(data);
+
       backupStatus(
         'El teléfono no habilitó el envío directo. El respaldo se descargó: adjúntalo en WhatsApp como Documento y guárdalo en un chat.'
       );
+
       return;
     }
 
@@ -2394,15 +2469,18 @@ h1{font-size:1.6rem}
         backupStatus(
           'Compartir se canceló. Puedes intentarlo de nuevo o tocar Guardar respaldo.'
         );
+
         toast('Compartir se canceló.');
       } else {
         await exportBackup(data);
+
         backupStatus(
           'No se pudo compartir directamente. Se descargó el respaldo; puedes enviarlo en WhatsApp como Documento.'
         );
       }
     } finally {
       sharingBackup = false;
+
       ['shareBackup', 'localShareBackup'].forEach(id => {
         $(id).disabled = false;
       });
@@ -2559,6 +2637,7 @@ h1{font-size:1.6rem}
     }
 
     const valid = validateBackup(data);
+
     $('optionsDialog').close();
 
     const ok = await ask(
@@ -2599,6 +2678,7 @@ h1{font-size:1.6rem}
     if (quoted) throw new Error('Hay una comilla sin cerrar.');
 
     out.push(value.trim());
+
     return out;
   }
 
@@ -2715,6 +2795,7 @@ h1{font-size:1.6rem}
 
       state.importStudents = [];
       $('rosterDialog').close();
+
       toast(`${count} alumnos agregados.`);
     } finally {
       $('saveRoster').disabled = false;
@@ -2768,7 +2849,7 @@ h1{font-size:1.6rem}
     if (b && !b.disabled) {
       $('search').blur();
       $('newStudentName').blur();
-      registerLate(b.dataset.mark).catch(showError);
+      toggleLate(b.dataset.mark).catch(showError);
     }
   };
 
@@ -2809,6 +2890,7 @@ h1{font-size:1.6rem}
 
   $('undoToast').addEventListener('click', () => {
     const action = undoAction;
+
     undoAction = null;
     $('toast').hidden = true;
 
@@ -2845,7 +2927,9 @@ h1{font-size:1.6rem}
 
   $('backupFile').addEventListener('change', e => {
     const file = e.target.files[0];
+
     e.target.value = '';
+
     importBackup(file).catch(showError);
   });
 
@@ -2866,7 +2950,9 @@ h1{font-size:1.6rem}
 
   $('rosterFile').addEventListener('change', async e => {
     const file = e.target.files[0];
+
     e.target.value = '';
+
     if (!file) return;
 
     try {
@@ -2875,6 +2961,7 @@ h1{font-size:1.6rem}
       }
 
       $('rosterText').value = await file.text();
+
       reviewRoster();
     } catch (error) {
       showError(error);
@@ -2997,19 +3084,23 @@ h1{font-size:1.6rem}
         req.onsuccess = () => {
           if (!req.result) {
             const students = tx.objectStore('students');
+
             seed.forEach(s => students.add(s));
+
             meta.put({key: 'initialized', value: true});
           }
         };
       });
 
       state.ready = true;
+
       await reload();
 
       window.Puntualidad = {
         ready: true,
         search: filteredStudents,
         register: registerLate,
+        toggle: toggleLate,
         remove: removeLate,
         backup: backupData,
         validateBackup,
