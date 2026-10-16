@@ -289,7 +289,7 @@ h1{font-size:1.6rem}
           <h2>¿Quién llegó tarde?</h2>
           <p>Toca la palomita para marcar; tócala otra vez para quitar el retardo.</p>
         </div>
-        <span class="roster-count" id="rosterCount">345 alumnos</span>
+        <span class="roster-count" id="rosterCount">348 alumnos</span>
       </div>
 
       <label class="sr-only" for="search">Nombre o apellido del alumno</label>
@@ -607,6 +607,7 @@ h1{font-size:1.6rem}
     "5189fa8a48c12035|ALEJANDRA MICHELLE MARTINEZ VARGAS",
     "a0b7708b8479e546|DIEGO RAFAEL OLIVAS VARELA",
     "ff409b97c1778f75|VANESSA ARLETH PEREZ ARCE",
+    "c2f0a4fe417b5289|MARTIN REYES PALACIOS",
     "bd94b9504d7ef6ad|DYLAN PATRICIO RODRIGUEZ GARCIA",
     "0dace200be5d7f4f|ALESSIA MILEY RODRIGUEZ SAN MARTIN",
     "1db6c12d95d80f04|SOFIA RODRIGUEZ VALERO",
@@ -660,6 +661,7 @@ h1{font-size:1.6rem}
     "e66323f668f82cc3|NAIDELYN ALEXA MAYA GARCIA",
     "9bfb62491c21af8e|DARIO ORTA OZUNA",
     "dadaa5623175f03f|JESUS ALEJANDRO POMPA MENDEZ",
+    "f1784fa9da5cd17a|ALEXANDER RANGEL ESPINOZA",
     "039cba339333d255|WENDY ARIADNA RANGEL GUERRERO",
     "cd2e606364850450|JESUS ALEXIS RANGEL RODRIGUEZ",
     "6a026edfbd5be9dd|ROBERTO CARLOS RAYGOSA TREVIÑO",
@@ -844,6 +846,7 @@ h1{font-size:1.6rem}
     "6f57402afb741bea|MIGUEL GERARDO ORTIZ VICTORIANO",
     "7a4284efe1088d6a|CAMILA PAREDES NUÑEZ",
     "7396813c7c80d8c3|LIA MAGALY RAMIREZ GALVAN",
+    "7f8451d40f2f8ef8|EDGAR ELIUD RAMOS ESPINOZA",
     "52e7855d5473847b|LIDIA GUADALUPE RANGEL RODRIGUEZ",
     "5213b45dddc5d1f5|AXEL EDUARDO RIOS HERNANDEZ",
     "fc94483f420e7f97|CRISTIAN LOGAN RODRIGUEZ ARGUELLO",
@@ -2617,6 +2620,7 @@ h1{font-size:1.6rem}
       }
     });
 
+    await syncSeedRoster();
     await reload();
     notifyChange();
   }
@@ -3073,24 +3077,50 @@ h1{font-size:1.6rem}
       'Este HTML funciona sin internet donde el navegador permita guardar datos. Usa siempre la misma copia y navegador; si cambias de ubicación, restaura tu respaldo.';
   }
 
+  // Completa la lista inicial sin borrar alumnos locales ni registros.
+  async function syncSeedRoster() {
+    const rosterKey = s =>
+      `${groupKey(s)}|${norm(s.name).split(' ').sort().join(' ')}`;
+
+    await transaction(['students', 'meta'], 'readwrite', tx => {
+      const students = tx.objectStore('students');
+      const request = students.getAll();
+
+      request.onsuccess = () => {
+        const byId = new Map(request.result.map(s => [s.id, s]));
+        const known = new Set(request.result.map(rosterKey));
+
+        for (const student of seed) {
+          const existing = byId.get(student.id);
+
+          if (existing) {
+            if (existing.grade === student.grade &&
+                existing.group === student.group &&
+                existing.order !== student.order) {
+              students.put({...existing, order: student.order});
+            }
+            continue;
+          }
+
+          const key = rosterKey(student);
+
+          // Si ya se capturó manualmente, conserva su ID y su historial.
+          if (!known.has(key)) {
+            students.add(student);
+            known.add(key);
+          }
+        }
+
+        tx.objectStore('meta').put({key: 'initialized', value: true});
+      };
+    });
+  }
+
   async function init() {
     try {
       state.db = await openDatabase();
 
-      await transaction(['students', 'meta'], 'readwrite', tx => {
-        const meta = tx.objectStore('meta');
-        const req = meta.get('initialized');
-
-        req.onsuccess = () => {
-          if (!req.result) {
-            const students = tx.objectStore('students');
-
-            seed.forEach(s => students.add(s));
-
-            meta.put({key: 'initialized', value: true});
-          }
-        };
-      });
+      await syncSeedRoster();
 
       state.ready = true;
 
@@ -3131,6 +3161,7 @@ h1{font-size:1.6rem}
   setInterval(updateClock, 15000);
   init();
 })();
+
 </script>
 </body>
 </html>
